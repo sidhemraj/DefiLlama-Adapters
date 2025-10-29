@@ -31,7 +31,7 @@ const getPositionLiquidityAbi = 'function getPositionLiquidity(uint256 tokenId) 
 */
 async function unwrapUniswapLPs(balances, lpPositions, block, chain = 'ethereum', transformAddress = null, excludeTokensRaw = [], uni_type = 'standard',) {
   if (!transformAddress)
-    transformAddress = await getChainTransform(chain)
+    transformAddress = getChainTransform(chain)
   const api = new sdk.ChainApi({ chain, block })
   lpPositions = lpPositions.filter(i => +i.balance > 0)
   const excludeTokens = excludeTokensRaw.map(addr => addr.toLowerCase())
@@ -131,6 +131,7 @@ async function unwrapUniswapV4NFTs({ balances = {}, api, owner, nftAddress, stat
   async function getPositionIds() {
     uniV4PositionCallCount++
 
+    let block = await api.getBlock()
     if (uniV4PositionCallCount > 51) throw new Error('too many uniswap v4 position calls, find some other solution or remove caching, or batch owners')
 
     const defaultGraphEndpoints = {
@@ -157,7 +158,7 @@ async function unwrapUniswapV4NFTs({ balances = {}, api, owner, nftAddress, stat
 
 
     // in case the graph is stale or down, we use cached data, to ensure that owners still hold the v4 nfts, verify it on chain
-    const positionOwners = await sdk.api2.abi.multiCall({ chain, block, abi: 'function ownerOf(uint256) view returns (address)', calls: positionIds, target: nftAddress })
+    const positionOwners = await sdk.api2.abi.multiCall({ chain, abi: 'function ownerOf(uint256) view returns (address)', calls: positionIds, target: nftAddress })
     positionOwners.forEach((pOwner, i) => {
       if (pOwner.toLowerCase() === owner.toLowerCase()) verifiedPositionIds.push(positionIds[i])
     })
@@ -577,7 +578,7 @@ tokensAndOwners [
 */
 async function sumTokens(balances = {}, tokensAndOwners, block, chain = "ethereum", transformAddress, { resolveLP = false, unwrapAll = false, blacklistedLPs = [], skipFixBalances = false, abis = {}, permitFailure = false, sumChunkSize = undefined, sumChunkSleep = 3000 } = {}) {
   if (!transformAddress)
-    transformAddress = await getChainTransform(chain)
+    transformAddress = getChainTransform(chain)
 
   let ethBalanceInputs = []
 
@@ -661,7 +662,7 @@ async function sumTokens(balances = {}, tokensAndOwners, block, chain = "ethereu
     await unwrapLPsAuto({ balances, block, chain, transformAddress, blacklistedLPs, abis })
 
   if (!skipFixBalances && ['astar', 'harmony', 'kava', 'thundercore', 'klaytn', 'evmos'].includes(chain)) {
-    const fixBalances = await getFixBalances(chain)
+    const fixBalances = getFixBalances(chain)
     fixBalances(balances)
   }
 
@@ -722,7 +723,7 @@ async function unwrapLPsAuto({ api, balances, block, chain = "ethereum", transfo
   }
 
   if (!transformAddress)
-    transformAddress = await getChainTransform(chain)
+    transformAddress = getChainTransform(chain)
 
   pool2Tokens = pool2Tokens.map(token => token.toLowerCase())
   blacklistedLPs = blacklistedLPs.map(token => token.toLowerCase())
@@ -1003,8 +1004,20 @@ group by
 
 
   if (!skipFixBalances) {
-    const fixBalances = await getFixBalances(chain)
+    const fixBalances = getFixBalances(chain)
     fixBalances(balances)
+  }
+
+
+  // we current dont have mapping or price support for hex address format (0x...) of tron tokens so we convert them to T... format
+  if (api.chain === 'tron') {
+    Object.entries(balances).forEach(([token, value]) => {
+      if (token.includes(nullAddress)) return;
+      if (!token.startsWith('tron:0x')) return;
+      api.removeTokenBalance(token)
+      const tronToken = sdk.util.evmToTronAddress(token.split(':')[1])
+      sdk.util.sumSingleBalance(balances, tronToken, value, chain)
+    })
   }
 
   return balances
@@ -1046,6 +1059,7 @@ async function unwrapHypervisorVaults({ api, lps }) {
     api.add(token1s[i], token1Bal)
     api.removeTokenBalance(lpToken)
   })
+
 
   return api.getBalances()
 }
